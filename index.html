@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D Аквариум</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #050e14;
+            font-family: sans-serif;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        .instructions {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            pointer-events: none;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="instructions">Крутите аквариум мышкой или пальцем</div>
+    <div id="canvas-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // --- Настройки сцены ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a1e29);
+        scene.fog = new THREE.FogExp2(0x0a1e29, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 15);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Управление (поддерживает мобильные)
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2 + 0.1; // Не даем камере уходить совсем под пол
+
+        // --- Свет ---
+        const ambientLight = new THREE.AmbientLight(0x407090, 1.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(5, 15, 5);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // --- Размеры аквариума ---
+        const aqWidth = 12;
+        const aqHeight = 7;
+        const aqDepth = 6;
+
+        // --- Стекло аквариума ---
+        const glassGeo = new THREE.BoxGeometry(aqWidth, aqHeight, aqDepth);
+        const glassMat = new THREE.MeshPhysicalMaterial({
+            color: 0x5dade2,
+            transparent: true,
+            opacity: 0.15,
+            roughness: 0.1,
+            metalness: 0.1,
+            transmission: 0.9,
+            ior: 1.5,
+            side: THREE.BackSide
+        });
+        const aquarium = new THREE.Mesh(glassGeo, glassMat);
+        aquarium.position.y = aqHeight / 2;
+        scene.add(aquarium);
+
+        // Ободок аквариума (каркас)
+        const edges = new THREE.EdgesGeometry(glassGeo);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x1b4f72, linewidth: 2 });
+        const wireframe = new THREE.LineSegments(edges, lineMat);
+        wireframe.position.y = aqHeight / 2;
+        scene.add(wireframe);
+
+        // --- Дно: Песок ---
+        const sandGeo = new THREE.PlaneGeometry(aqWidth - 0.1, aqDepth - 0.1, 32, 32);
+        // Делаем песок рельефным
+        const posAttr = sandGeo.attributes.position;
+        for (let i = 0; i < posAttr.count; i++) {
+            const vx = posAttr.getX(i);
+            const vy = posAttr.getY(i);
+            const zNoise = Math.sin(vx * 2) * 0.1 + Math.cos(vy * 2) * 0.1;
+            posAttr.setZ(i, zNoise);
+        }
+        sandGeo.computeVertexNormals();
+
+        const sandMat = new THREE.MeshStandardMaterial({ color: 0xdfc48c, roughness: 0.9 });
+        const sand = new THREE.Mesh(sandGeo, sandMat);
+        sand.rotation.x = -Math.PI / 2;
+        sand.position.y = 0.05;
+        scene.add(sand);
+
+        // --- Камни ---
+        const stones = [];
+        const stoneGeo = new THREE.DodecahedronGeometry(0.4, 1);
+        const stoneMat = new THREE.MeshStandardMaterial({ color: 0x717d7e, roughness: 0.8 });
+        
+        for(let i=0; i<8; i++) {
+            const stone = new THREE.Mesh(stoneGeo, stoneMat);
+            stone.scale.set(1 + Math.random(), 0.5 + Math.random(), 1 + Math.random());
+            stone.position.set(
+                (Math.random() - 0.5) * (aqWidth - 2),
+                0.2,
+                (Math.random() - 0.5) * (aqDepth - 2)
+            );
+            stone.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, 0);
+            scene.add(stone);
+        }
+
+        // --- Водоросли ---
+        const plants = [];
+        const createPlant = (x, z, height, count) => {
+            const plantGroup = new THREE.Group();
+            plantGroup.position.set(x, 0, z);
+            
+            for(let i=0; i<count; i++) {
+                const segmentCount = 5;
+                const leafGeo = new THREE.ConeGeometry(0.15, height / segmentCount, 4);
+                leafGeo.translate(0, (height / segmentCount) / 2, 0);
+                
+                let lastSegment = plantGroup;
+                const leaves = [];
+                
+                for(let j=0; j<segmentCount; j++) {
+                    const leaf = new THREE.Mesh(leafGeo, new THREE.MeshStandardMaterial({
+                        color: 0x1e8449, 
+                        roughness: 0.6,
+                        side: THREE.DoubleSide
+                    }));
+                    leaf.position.y = j === 0 ? 0 : height / segmentCount;
+                    lastSegment.add(leaf);
+                    lastSegment = leaf;
+                    leaves.push(leaf);
+                }
+                // Сдвигаем веточки внутри куста
+                leaves[0].position.x = (Math.random() - 0.5) * 0.3;
+                leaves[0].position.z = (Math.random() - 0.5) * 0.3;
+                plants.push({ leaves, speed: 1 + Math.random(), offset: Math.random() * 100 });
+            }
+            scene.add(plantGroup);
+        };
+
+        createPlant(-3, -1, 3, 4);
+        createPlant(4, 1, 2.5, 5);
+        createPlant(0, -1.5, 3.5, 3);
+
+        // --- Вода (Верхняя колышущаяся грань) ---
+        const waterGeo = new THREE.PlaneGeometry(aqWidth, aqDepth, 30, 30);
+        const waterMat = new THREE.MeshPhysicalMaterial({
+            color: 0x48c9b0,
+            transparent: true,
+            opacity: 0.6,
+            roughness: 0.1,
+            metalness: 0.1,
+            side: THREE.DoubleSide
+        });
+        const water = new THREE.Mesh(waterGeo, waterMat);
+        water.rotation.x = -Math.PI / 2;
+        water.position.y = aqHeight - 0.1;
+        scene.add(water);
+
+        // --- Пузырьки ---
+        const bubbleCount = 40;
+        const bubbleGeo = new THREE.SphereGeometry(0.06, 8, 8);
+        const bubbleMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.7,
+            roughness: 0,
+            metalness: 0.9
+        });
+        
+        const bubbles = [];
+        for(let i=0; i<bubbleCount; i++) {
+            const bubble = new THREE.Mesh(bubbleGeo, bubbleMat);
+            bubble.position.set(
+                (Math.random() - 0.5) * (aqWidth - 1),
+                Math.random() * aqHeight,
+                (Math.random() - 0.5) * (aqDepth - 1)
+            );
+            scene.add(bubble);
+            bubbles.push(bubble);
+        }
+
+        // --- СОЗДАНИЕ РЫБКИ ---
+        const createFish = () => {
+            const fishGroup = new THREE.Group();
+
+            const orangeMat = new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.5 });
+            const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+            const blackMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+            const finMat = new THREE.MeshStandardMaterial({ 
+                color: 0xff9933, 
+                transparent: true, 
+                opacity: 0.8, 
+                side: THREE.DoubleSide 
+            });
+
+            // 1. Туловище (вытянутая сфера)
+            const bodyGeo = new THREE.SphereGeometry(0.4, 16, 16);
+            bodyGeo.scale(2, 1.2, 0.7); // сплющиваем и вытягиваем
+            const body = new THREE.Mesh(bodyGeo, orangeMat);
+            fishGroup.add(body);
+
+            // 2. Глаза
+            const eyeGeo = new THREE.SphereGeometry(0.08, 8, 8);
+            const pupilGeo = new THREE.SphereGeometry(0.04, 8, 8);
+
+            // Левый глаз
+            const eyeL = new THREE.Mesh(eyeGeo, whiteMat);
+            eyeL.position.set(0.5, 0.2, 0.25);
+            const pupilL = new THREE.Mesh(pupilGeo, blackMat);
+            pupilL.position.set(0.55, 0.2, 0.31);
+            fishGroup.add(eyeL, pupilL);
+
+            // Правый глаз
+            const eyeR = new THREE.Mesh(eyeGeo, whiteMat);
+            eyeR.position.set(0.5, 0.2, -0.25);
+            const pupilR = new THREE.Mesh(pupilGeo, blackMat);
+            pupilR.position.set(0.55, 0.2, -0.31);
+            fishGroup.add(eyeR, pupilR);
+
+            // 3. Плавники
+            // Верхний плавник
+            const topFinGeo = new THREE.ConeGeometry(0.15, 0.8, 3);
+            topFinGeo.rotateX(Math.PI/3);
+            const topFin = new THREE.Mesh(topFinGeo, finMat);
+            topFin.position.set(-0.2, 0.7, 0);
+            fishGroup.add(topFin);
+
+            // Боковые плавники
+            const sideFinGeo = new THREE.ConeGeometry(0.1, 0.5, 3);
+            sideFinGeo.rotateZ(-Math.PI/3);
+            
+            const leftFin = new THREE.Mesh(sideFinGeo, finMat);
+            leftFin.position.set(0.2, -0.2, 0.4);
+            leftFin.rotation.y = Math.PI/4;
+            fishGroup.add(leftFin);
+
+            const rightFin = new THREE.Mesh(sideFinGeo, finMat);
+            rightFin.position.set(0.2, -0.2, -0.4);
+            rightFin.rotation.y = -Math.PI/4;
+            fishGroup.add(rightFin);
+
+            // 4. Хвост (в отдельную группу для анимации движения)
+            const tailGroup = new THREE.Group();
+            tailGroup.position.set(-0.7, 0, 0);
+
+            const tailFinGeo = new THREE.ConeGeometry(0.3, 0.9, 3);
+            tailFinGeo.rotateZ(Math.PI/2);
+            tailFinGeo.scale(1, 1, 0.2); // плоский хвост
+            const tailFin = new THREE.Mesh(tailFinGeo, finMat);
+            tailFin.position.x = -0.4;
+            tailGroup.add(tailFin);
+
+            fishGroup.add(tailGroup);
+
+            // Масштабируем всю рыбку целиком для разнообразия
+            const scale = 0.6 + Math.random() * 0.4;
+            fishGroup.scale.set(scale, scale, scale);
+
+            return {
+                mesh: fishGroup,
+                tail: tailGroup,
+                velocity: new THREE.Vector3((Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.01, (Math.random() - 0.5) * 0.03),
+                wiggleSpeed: 15 + Math.random() * 5,
+                swimOffset: Math.random() * 100
+            };
+        };
+
+        // Создаем 3 рыбок
+        const fishes = [];
+        for(let i=0; i<3; i++) {
+            const fish = createFish();
+            fish.mesh.position.set(
+                (Math.random() - 0.5) * (aqWidth - 2),
+                2 + Math.random() * (aqHeight - 4),
+                (Math.random() - 0.5) * (aqDepth - 2)
+            );
+            scene.add(fish.mesh);
+            fishes.push(fish);
+        }
+
+        // --- Главный цикл анимации ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+
+            // 1. Анимация покачивания водорослей
+            plants.forEach(plant => {
+                plant.leaves.forEach((leaf, index) => {
+                    leaf.rotation.z = Math.sin(time * plant.speed + plant.offset) * 0.05;
+                    leaf.rotation.x = Math.cos(time * plant.speed + plant.offset) * 0.03;
+                });
+            });
+
+            // 2. Плеск/Волны воды
+            const waterPos = waterGeo.attributes.position;
+            for (let i = 0; i < waterPos.count; i++) {
+                const u = waterPos.getX(i);
+                const v = waterPos.getY(i);
+                // Формула волн на основе синусов от координат и времени
+                const zValue = Math.sin(u * 1.5 + time * 2.0) * 0.08 + Math.cos(v * 1.5 + time * 1.5) * 0.08;
+                waterPos.setZ(i, zValue);
+            }
+            waterGeo.computeVertexNormals();
+            waterGeo.attributes.position.needsUpdate = true;
+
+            // 3. Движение пузырьков
+            bubbles.forEach(bubble => {
+                bubble.position.y += 0.02;
+                bubble.position.x += Math.sin(time + bubble.position.y) * 0.01; // покачивание в стороны
+                
+                // Если пузырек всплыл, возвращаем его на дно
+                if (bubble.position.y > aqHeight - 0.3) {
+                    bubble.position.y = 0.2;
+                    bubble.position.x = (Math.random() - 0.5) * (aqWidth - 1);
+                }
+            });
+
+            // 4. Поведение и физика рыбок
+            fishes.forEach(fish => {
+                // Движение вперед
+                fish.mesh.position.add(fish.velocity);
+
+                // Машем хвостом в зависимости от скорости
+                fish.tail.rotation.y = Math.sin(time * fish.wiggleSpeed) * 0.3;
+
+                // Поворачиваем рыбку в сторону её движения
+                const angle = Math.atan2(-fish.velocity.z, fish.velocity.x);
+                fish.mesh.rotation.y = angle;
+
+                // Плавное покачивание по вертикали во время плавания
+                fish.mesh.position.y += Math.sin(time * 2 + fish.swimOffset) * 0.005;
+
+                // Проверка границ аквариума (искусственный интеллект разворота)
+                const padding = 1.0;
+                if (Math.abs(fish.mesh.position.x) > (aqWidth / 2 - padding)) {
+                    fish.velocity.x *= -1;
+                }
+                if (Math.abs(fish.mesh.position.z) > (aqDepth / 2 - padding)) {
+                    fish.velocity.z *= -1;
+                }
+                if (fish.mesh.position.y < 0.8 || fish.mesh.position.y > (aqHeight - 1.2)) {
+                    fish.velocity.y *= -1;
+                }
+
+                // Случайное небольшое изменение курса, чтобы плавали реалистично
+                if(Math.random() < 0.02) {
+                    fish.velocity.x += (Math.random() - 0.5) * 0.01;
+                    fish.velocity.z += (Math.random() - 0.5) * 0.01;
+                    fish.velocity.y += (Math.random() - 0.5) * 0.005;
+                    // Ограничиваем максимальную скорость
+                    fish.velocity.clampLength(0.01, 0.04);
+                }
+            });
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Поддержка изменения размеров экрана (включая поворот телефона)
+        window.addEventListener('resize', onWindowResize, false);
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Запуск
+        animate();
+    </script>
+</body>
+</html>
